@@ -96,7 +96,7 @@ def vehicle_group(value: object) -> str:
     if any(token in label for token in ("R2", "RODA 2", "SEPEDA MOTOR", "MOTOR")):
         return "R2 / Sepeda Motor"
     if any(token in label for token in ("R4", "RODA 4", "MINIBUS", "MOBIL")):
-        return "R4 / Minibus"
+        return "R4 / Mobil"
     return "Lainnya"
 
 
@@ -298,8 +298,8 @@ with filter_container:
     st.markdown("#### Filter Global")
     min_date, max_date = data["tgl_daftar"].min().date(), data["tgl_daftar"].max().date()
     start_filter, end_filter, upt_filter, vehicle_filter = st.columns(4)
-    start_date = start_filter.date_input("TglAwal", min_date, min_value=min_date, max_value=max_date)
-    end_date = end_filter.date_input("TglAkhir", max_date, min_value=min_date, max_value=max_date)
+    start_date = start_filter.date_input("Tanggal Awal Daftar", min_date, min_value=min_date, max_value=max_date)
+    end_date = end_filter.date_input("Tanggal Akhir Daftar", max_date, min_value=min_date, max_value=max_date)
     selected_upt = upt_filter.multiselect("Nama Wilayah / UPT", sorted(data["upt"].unique()))
     vehicle_options = sorted(data.loc[data["jenis_kendaraan"] != "Tidak tersedia", "jenis_kendaraan"].unique())
     selected_vehicle = vehicle_filter.multiselect("Jenis Kendaraan", vehicle_options)
@@ -421,10 +421,22 @@ st.markdown("<br>", unsafe_allow_html=True)
 
 st.subheader("Analisis Tren & Waktu")
 granularity = st.radio("Granularitas tren", ["Harian", "Bulanan"], horizontal=True)
-trend_data = filtered.copy(); trend_data["periode_tren"] = trend_data["tgl_daftar"].dt.to_period("D" if granularity == "Harian" else "M").dt.to_timestamp()
+trend_data = filtered.copy()
+trend_data["periode_tren"] = trend_data["tgl_daftar"].dt.to_period("D" if granularity == "Harian" else "M").dt.to_timestamp()
 trend_data = trend_data.groupby("periode_tren", as_index=False)["total"].sum()
-trend = px.line(trend_data, x="periode_tren", y="total", markers=True, labels={"periode_tren": "Tanggal", "total": "Pendapatan (Rp)"})
-st.plotly_chart(chart_layout(trend, f"Tren Penerimaan Pajak {granularity}"), use_container_width=True)
+
+# Konversi nilai total ke dalam satuan Juta Rupiah
+trend_data["total_juta"] = trend_data["total"] / 1_000_000
+
+trend = px.line(
+    trend_data, 
+    x="periode_tren", 
+    y="total_juta", 
+    markers=True, 
+    labels={"periode_tren": "Tanggal", "total_juta": "Pendapatan (Juta Rp)"}
+)
+trend.update_traces(hovertemplate="Tanggal: %{x|%d-%m-%Y}<br>Pendapatan: Rp %{y:,.2f} Juta<extra></extra>")
+st.plotly_chart(chart_layout(trend, f"Tren Penerimaan Pajak {granularity} (dalam Juta Rp)"), use_container_width=True)
 
 st.subheader("Komposisi Objek Pajak")
 composition_col, brand_col = st.columns(2)
@@ -437,21 +449,66 @@ with composition_col:
 with brand_col:
     brand_data = filtered[filtered["merk_model"] != "Tidak tersedia"].groupby("merk_model", as_index=False)["total"].sum().nlargest(5, "total")
     if brand_data.empty: st.info("Kolom Merk/Merek atau Model belum tersedia pada CSV.")
-    else: st.plotly_chart(chart_layout(px.bar(brand_data.sort_values("total"), x="total", y="merk_model", orientation="h", labels={"total":"Pendapatan (Rp)","merk_model":"Merk / Model"}), "Top 5 Merk / Model"), use_container_width=True)
+    else:
+        brand_data["total_juta"] = brand_data["total"] / 1_000_000
+        fig_bar_brand = px.bar(
+            brand_data.sort_values("total_juta"), 
+            x="total_juta", 
+            y="merk_model", 
+            orientation="h", 
+            labels={"total_juta": "Pendapatan (Juta Rp)", "merk_model": "Merk / Model"}
+        )
+        fig_bar_brand.update_traces(hovertemplate="Merk / Model: %{y}<br>Pendapatan: Rp %{x:,.2f} Juta<extra></extra>")
+        st.plotly_chart(chart_layout(fig_bar_brand, "Top 5 Merk / Model (dalam Juta Rp)"), use_container_width=True)
 
 left_col, right_col = st.columns(2)
 with left_col:
     st.subheader("Kinerja Wilayah & Pembayaran")
     region_data = filtered.groupby("upt", as_index=False)["total"].sum().sort_values("total")
-    st.plotly_chart(chart_layout(px.bar(region_data, x="total", y="upt", orientation="h", labels={"total":"Pendapatan (Rp)","upt":"Nama Wilayah / UPT"}), "Pendapatan per Wilayah / Lokasi Bayar"), use_container_width=True)
+    region_data["total_juta"] = region_data["total"] / 1_000_000
+    fig_bar_region = px.bar(
+        region_data, 
+        x="total_juta", 
+        y="upt", 
+        orientation="h", 
+        labels={"total_juta": "Pendapatan (Juta Rp)", "upt": "Nama Wilayah / UPT"}
+    )
+    fig_bar_region.update_traces(hovertemplate="Wilayah / UPT: %{y}<br>Pendapatan: Rp %{x:,.2f} Juta<extra></extra>")
+    st.plotly_chart(chart_layout(fig_bar_region, "Pendapatan per Wilayah / Lokasi Bayar (dalam Juta Rp)"), use_container_width=True)
+
 with right_col:
     st.subheader("Kepatuhan & Pendapatan Lainnya")
     registration_data = filtered[filtered["jenis_pendaftaran"] != "Tidak tersedia"].groupby("jenis_pendaftaran", as_index=False).size()
     if registration_data.empty: st.info("Kolom Jenis_Pendaftaran belum tersedia pada CSV.")
     else: st.plotly_chart(chart_layout(px.pie(registration_data, names="jenis_pendaftaran", values="size", hole=.5), "Proporsi Jenis Pendaftaran"), use_container_width=True)
-    denda_summary = pd.DataFrame({"Komponen":["Denda PKB","Denda BBN"],"Nominal":[filtered["denda_pkb"].sum(),filtered["denda_bbn"].sum()]})
-    st.dataframe(denda_summary, hide_index=True, use_container_width=True, column_config={"Nominal":st.column_config.NumberColumn(format="Rp %d")})
+    
+    denda_summary = pd.DataFrame({
+        "Komponen": ["Denda PKB", "Denda BBN"],
+        "Nominal Juta": [filtered["denda_pkb"].sum() / 1_000_000, filtered["denda_bbn"].sum() / 1_000_000]
+    })
+    st.dataframe(denda_summary, hide_index=True, use_container_width=True, column_config={"Nominal Juta": st.column_config.NumberColumn("Nominal (Juta Rp)", format="Rp %.2f Juta")})
 
 st.subheader("Detail Transaksi")
 detail_columns = [column for column in ["tgl_daftar","upt","nopol","jenis_kendaraan","merk_model","jenis_pendaftaran","total_pokok","denda_pkb","denda_bbn","total"] if column in filtered]
-st.dataframe(filtered[detail_columns].sort_values("tgl_daftar", ascending=False), use_container_width=True, hide_index=True, column_config={"tgl_daftar":"TglDaftar","upt":"Wilayah / UPT","total_pokok":st.column_config.NumberColumn("Pokok",format="Rp %d"),"denda_pkb":st.column_config.NumberColumn("Denda PKB",format="Rp %d"),"denda_bbn":st.column_config.NumberColumn("Denda BBN",format="Rp %d"),"total":st.column_config.NumberColumn("Total",format="Rp %d")})
+
+detail_df = filtered[detail_columns].sort_values("tgl_daftar", ascending=False).copy()
+for col in ["total_pokok", "denda_pkb", "denda_bbn", "total"]:
+    if col in detail_df.columns:
+        detail_df[f"{col}_juta"] = detail_df[col] / 1_000_000
+
+display_detail_cols = ["tgl_daftar", "upt", "nopol", "jenis_kendaraan", "merk_model", "jenis_pendaftaran", "total_pokok_juta", "denda_pkb_juta", "denda_bbn_juta", "total_juta"]
+available_display_cols = [c for c in display_detail_cols if c in detail_df.columns]
+
+st.dataframe(
+    detail_df[available_display_cols], 
+    use_container_width=True, 
+    hide_index=True, 
+    column_config={
+        "tgl_daftar": "TglDaftar",
+        "upt": "Wilayah / UPT",
+        "total_pokok_juta": st.column_config.NumberColumn("Pokok (Jt)", format="Rp %.2f Jt"),
+        "denda_pkb_juta": st.column_config.NumberColumn("Denda PKB (Jt)", format="Rp %.2f Jt"),
+        "denda_bbn_juta": st.column_config.NumberColumn("Denda BBN (Jt)", format="Rp %.2f Jt"),
+        "total_juta": st.column_config.NumberColumn("Total (Jt)", format="Rp %.2f Jt")
+    }
+)
